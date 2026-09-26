@@ -18,6 +18,10 @@ design while evolving with a shifting environment.
 
 -   [python3](http://www.python.org/)
 -   [mpv](https://mpv.io/)
+-   For SID files, mpv must include FFmpeg's `libgme` demuxer.
+
+Check that `ffmpeg -demuxers` lists `libgme`. If it does not, install or
+build an mpv/FFmpeg package with Game Music Emu support.
 
 # Installation
 

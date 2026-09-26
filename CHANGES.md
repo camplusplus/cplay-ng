@@ -1,3 +1,7 @@
+# Unreleased
+
+- add SID file support (requires mpv with FFmpeg's libgme demuxer)
+
 # 5.5.0 (2026-04-25)
 
 - include symlink dirs in directory listings

@@ -18,7 +18,8 @@ __version__ = '5.5.0'
 XDG_RUNTIME_DIR = os.getenv('XDG_RUNTIME_DIR', '/tmp')
 
 AUDIO_EXTENSIONS = [
-    'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma'
+    'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma',
+    'sid',
 ]
 
 HELP = """Global
