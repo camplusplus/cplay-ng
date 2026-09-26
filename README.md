@@ -26,6 +26,20 @@ support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
 configured song length, and seeks by restarting at a five-second offset.
 The volume keys control mpv and do not affect sidplayfp playback.
 
+# GamePi13 controls
+
+When the Waveshare GamePi13 joystick driver exposes the pad as
+`/dev/input/js0`, cplay reads it automatically. The D-pad navigates, A
+selects/plays, B goes back, X toggles play/pause, Y skips to the next track,
+L/R seek backward/forward, Select opens help, and Start switches tabs.
+Holding a D-pad direction repeats navigation. Keyboard controls continue to
+work as well.
+
+Install and configure the GPIO joystick driver as described in the
+[GamePi13 guide](https://www.waveshare.com/wiki/GamePi13), and make sure your
+user can read `/dev/input/js0`. For a non-default joystick device, set
+`CPLAY_GAMEPI13_DEVICE` to its path before starting cplay.
+
 # Installation
 
     $ pip install cplay-ng

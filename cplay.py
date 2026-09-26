@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import curses
+import fcntl
 import functools
 import json
 import os
@@ -9,6 +10,7 @@ import re
 import selectors
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import termios
@@ -59,7 +61,34 @@ r, R         : toggle repeat/random
 s, S         : shuffle/sort playlist
 w            : enter filename for current playlist
 C            : close current playlist
-@            : jump to current track"""
+@            : jump to current track
+
+GamePi13
+--------
+D-pad        : navigate
+A            : select/play
+B            : go back
+X            : play/pause
+Y            : next track
+L, R         : seek backward/forward
+Select       : help
+Start        : switch tabs"""
+
+JS_EVENT_BUTTON = 0x01
+JS_EVENT_AXIS = 0x02
+JS_EVENT_INIT = 0x80
+JS_EVENT = struct.Struct('<IhBB')
+JSIOCGBTNMAP = 0x80046A34
+BTN_TO_KEY = {
+    0x130: '\n',  # A
+    0x131: curses.KEY_BACKSPACE,  # B
+    0x133: ' ',  # X
+    0x134: 'n',  # Y
+    0x136: curses.KEY_LEFT,  # L
+    0x137: curses.KEY_RIGHT,  # R
+    0x13A: 'h',  # Select
+    0x13B: '\t',  # Start
+}
 
 
 def clamp(value, _min, _max):
@@ -802,6 +831,94 @@ class Playlist(List):
         return True
 
 
+class GamePi13Controller:
+    def __init__(self):
+        self.fd = None
+        self.buffer = b''
+        self.axes = {0: 0, 1: 0}
+        self.repeat_key = None
+        self.repeat_at = None
+        self.repeat_interval = 0.12
+        path = os.getenv('CPLAY_GAMEPI13_DEVICE', '/dev/input/js0')
+        try:
+            self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            return
+
+        button_map = bytearray(512 * 2)
+        try:
+            fcntl.ioctl(self.fd, JSIOCGBTNMAP, button_map, True)
+        except OSError:
+            self.close()
+            raise
+        codes = struct.unpack('<512H', button_map)
+        self.buttons = {
+            index: BTN_TO_KEY[code]
+            for index, code in enumerate(codes)
+            if code in BTN_TO_KEY
+        }
+
+    def _set_axis(self, number, value, process_key):
+        if number not in self.axes:
+            return
+        direction = -1 if value < -16000 else 1 if value > 16000 else 0
+        if self.axes[number] == direction:
+            return
+        self.axes[number] = direction
+        if number == 0:
+            key = curses.KEY_LEFT if direction < 0 else curses.KEY_RIGHT
+        else:
+            key = curses.KEY_UP if direction < 0 else curses.KEY_DOWN
+
+        if direction:
+            self.repeat_key = key
+            process_key(key)
+            self.repeat_at = time.monotonic() + 0.45
+        elif self.repeat_key == key:
+            self.repeat_key = None
+            self.repeat_at = None
+
+    def process_events(self, process_key):
+        try:
+            data = os.read(self.fd, JS_EVENT.size * 32)
+        except BlockingIOError:
+            return
+        if not data:
+            self.close()
+            return
+        self.buffer += data
+        while len(self.buffer) >= JS_EVENT.size:
+            _, value, event_type, number = JS_EVENT.unpack_from(self.buffer)
+            self.buffer = self.buffer[JS_EVENT.size:]
+            if event_type & JS_EVENT_INIT:
+                continue
+            if event_type == JS_EVENT_AXIS:
+                self._set_axis(number, value, process_key)
+            elif event_type == JS_EVENT_BUTTON and value:
+                key = self.buttons.get(number)
+                if key is not None:
+                    process_key(key)
+
+    def get_timeout(self):
+        if self.repeat_at is None:
+            return None
+        return max(0, self.repeat_at - time.monotonic())
+
+    def repeat(self, process_key):
+        if self.repeat_at is None or time.monotonic() < self.repeat_at:
+            return
+        if self.repeat_key is None:
+            self.repeat_at = None
+            return
+        process_key(self.repeat_key)
+        self.repeat_at = time.monotonic() + self.repeat_interval
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
 class Application:
     def __init__(self):
         self.tabs = [filelist, playlist]
@@ -809,6 +926,7 @@ class Application:
         self.input = Input()
         self.old_lines = []
         self.screen: curses.window
+        self.controller = GamePi13Controller()
 
         # self-pipe to avoid concurrency issues with signal
         self.resize_in, self.resize_out = os.pipe2(os.O_NONBLOCK)
@@ -914,12 +1032,21 @@ class Application:
             sel.register(sys.stdin, selectors.EVENT_READ)
             sel.register(self.resize_in, selectors.EVENT_READ)
             sel.register(player.socket, selectors.EVENT_READ)
+            if self.controller.fd is not None:
+                sel.register(self.controller.fd, selectors.EVENT_READ)
             prev = time.time()
 
             while True:
                 player.finish_seek()
 
                 timeout = 0.5 if player.is_playing else None
+                controller_timeout = self.controller.get_timeout()
+                if controller_timeout is not None:
+                    timeout = (
+                        controller_timeout
+                        if timeout is None
+                        else min(timeout, controller_timeout)
+                    )
                 for key, _mask in sel.select(timeout):
                     # if we have skipped multiple seconds, it is probably
                     # because the system was suspended. This heuristic is much
@@ -936,7 +1063,10 @@ class Application:
                         self.process_key(self.screen.get_wch())
                     elif key.fileobj is player.socket:
                         player.parse_progress()
+                    elif key.fileobj == self.controller.fd:
+                        self.controller.process_events(self.process_key)
 
+                self.controller.repeat(self.process_key)
                 if player.is_finished:
                     player.play(playlist.next())
 
@@ -964,6 +1094,7 @@ def main():
         with enable_ctrl_keys():
             app.run()
     finally:
+        app.controller.close()
         player.cleanup()
         curses.endwin()
 

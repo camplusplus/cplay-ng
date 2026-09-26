@@ -1,5 +1,6 @@
 # Unreleased
 
+- add GamePi13 joystick controls
 - play SID files with sidplayfp instead of requiring mpv's libgme demuxer
 
 # 5.5.0 (2026-04-25)
