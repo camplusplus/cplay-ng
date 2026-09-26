@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import curses
 import functools
 import json
@@ -115,7 +117,7 @@ def enable_ctrl_keys():
 
 
 def get_ext(path):
-    return os.path.splitext(path)[1].lstrip('.')
+    return os.path.splitext(path)[1].lstrip('.').lower()
 
 
 def listdir(path):
@@ -161,6 +163,9 @@ class Player:
         self.is_playing = False
         self._playing = 0
         self._buffer = b''
+        self._sid_proc = None
+        self._sid_paused = False
+        self._sid_started_at = None
 
         self.socket, self.socket_mpv = socket.socketpair()
         self._proc = subprocess.Popen(
@@ -207,6 +212,8 @@ class Player:
             self.handle_ipc(data)
 
     def get_progress(self):
+        if self._is_sid:
+            self._update_sid_position()
         if self.length == 0:
             return 0
         return self.position / self.length
@@ -220,14 +227,73 @@ class Player:
     def set_volume(self, vol):
         self._ipc('set', 'volume', str(vol))
 
+    @property
+    def _is_sid(self):
+        return (
+            self.path is not None
+            and not self.path.startswith(('http://', 'https://'))
+            and get_ext(self.path) == 'sid'
+        )
+
+    def _update_sid_position(self):
+        if self._sid_proc and self._sid_started_at is not None:
+            now = time.monotonic()
+            self.position += now - self._sid_started_at
+            self._sid_started_at = now
+
+    def _stop_sid(self):
+        proc = self._sid_proc
+        self._sid_proc = None
+        self._sid_paused = False
+        self._sid_started_at = None
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    def _start_sid(self, *, paused=False):
+        self._stop_sid()
+        self._sid_proc = subprocess.Popen(
+            [
+                'sidplayfp',
+                '-q',
+                f'-b{self.position:.3f}',
+                os.path.abspath(self.path),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+        )
+        self._sid_started_at = time.monotonic()
+        self._sid_paused = False
+        self.is_playing = True
+        if paused:
+            self._sid_proc.send_signal(signal.SIGSTOP)
+            self._sid_started_at = None
+            self._sid_paused = True
+            self.is_playing = False
+
     def stop(self):
+        if self._is_sid:
+            self._update_sid_position()
         self.is_playing = False
+        self._stop_sid()
         self._ipc('stop')
 
     def _play(self):
         if not self.path:
+            self._stop_sid()
             self.is_playing = False
             return
+        if self._is_sid:
+            self._ipc('stop')
+            self._start_sid()
+            return
+        self._stop_sid()
         self.is_playing = True
         self._playing += 1
         if get_mpv_version() >= (0, 38, 0):
@@ -247,12 +313,30 @@ class Player:
         self._play()
 
     def toggle(self):
+        if self._is_sid and self._sid_proc and self._sid_proc.poll() is None:
+            if self._sid_paused:
+                self._sid_proc.send_signal(signal.SIGCONT)
+                self._sid_started_at = time.monotonic()
+                self._sid_paused = False
+                self.is_playing = True
+            else:
+                self._update_sid_position()
+                self._sid_proc.send_signal(signal.SIGSTOP)
+                self._sid_started_at = None
+                self._sid_paused = True
+                self.is_playing = False
+            return
         if self.is_playing:
             self.stop()
         elif self.path:
             self._play()
 
     def seek(self, direction):
+        if self._is_sid:
+            self._update_sid_position()
+            self.position = max(0, self.position + direction * 5)
+            self._seek_timeout = time.time() + 0.5
+            return
         d = direction * self.length * 0.002
         if self._seek_step * d > 0:  # same direction
             self._seek_step += d
@@ -267,15 +351,29 @@ class Player:
         if self._seek_timeout and time.time() >= self._seek_timeout:
             self._seek_timeout = None
             self._seek_step = 0
-            if self.is_playing:
+            if self._is_sid and self._sid_proc:
+                self._start_sid(paused=self._sid_paused)
+            elif self.is_playing:
                 self._play()
 
     @property
     def is_finished(self):
+        if self._is_sid:
+            return (
+                self.is_playing
+                and self._sid_proc is not None
+                and self._sid_proc.poll() is not None
+            )
         return self.is_playing and self._playing == 0
 
     def cleanup(self):
+        self._stop_sid()
         self._proc.terminate()
+        try:
+            self._proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait()
         self.socket.close()
         self.socket_mpv.close()
 

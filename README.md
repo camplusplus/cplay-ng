@@ -18,10 +18,13 @@ design while evolving with a shifting environment.
 
 -   [python3](http://www.python.org/)
 -   [mpv](https://mpv.io/)
--   For SID files, mpv must include FFmpeg's `libgme` demuxer.
+-   For SID files, [sidplayfp](https://github.com/libsidplayfp/sidplayfp)
+    (available on Raspberry Pi OS with `sudo apt install sidplayfp`).
 
-Check that `ffmpeg -demuxers` lists `libgme`. If it does not, install or
-build an mpv/FFmpeg package with Game Music Emu support.
+SID files are played directly by sidplayfp; mpv and FFmpeg do not need SID
+support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
+configured song length, and seeks by restarting at a five-second offset.
+The volume keys control mpv and do not affect sidplayfp playback.
 
 # Installation
 
