@@ -6,6 +6,7 @@ import functools
 import glob
 import json
 import os
+import queue
 import random
 import re
 import selectors
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import termios
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 __version__ = '5.5.0'
 
@@ -94,6 +95,20 @@ BTN_TO_KEY = {
     0x137: curses.KEY_RIGHT,  # R
     0x13A: 'h',  # Select
     0x13B: '\t',  # Start
+}
+GAMEPI13_GPIO_KEYS = {
+    5: curses.KEY_UP,
+    6: curses.KEY_DOWN,
+    16: curses.KEY_LEFT,
+    13: curses.KEY_RIGHT,
+    26: '\t',
+    19: 'h',
+    21: '\n',
+    20: curses.KEY_BACKSPACE,
+    15: ' ',
+    12: 'n',
+    14: curses.KEY_RIGHT,
+    23: curses.KEY_LEFT,
 }
 
 
@@ -840,8 +855,12 @@ class Playlist(List):
 class GamePi13Controller:
     def __init__(self):
         self.fd = None
+        self.notify_fd = None
+        self.notify_write_fd = None
         self.mode = None
         self.buttons = {}
+        self.gpio_buttons = []
+        self.gpio_keys = queue.SimpleQueue()
         self.buffer = b''
         self.axes = {0: 0, 1: 0}
         self.repeat_key = None
@@ -849,6 +868,7 @@ class GamePi13Controller:
         self.repeat_interval = 0.12
         path = self._find_device()
         if path is None:
+            self._init_gpiozero()
             return
         self.mode = 'evdev' if os.path.basename(path).startswith('event') else 'joystick'
         self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
@@ -888,11 +908,59 @@ class GamePi13Controller:
         for path in joystick_paths + event_paths:
             if 'gpio controller' in cls._device_name(path).casefold():
                 return path
-        if '/dev/input/js0' in joystick_paths:
-            return '/dev/input/js0'
-        if joystick_paths:
-            return joystick_paths[0]
         return None
+
+    def _init_gpiozero(self):
+        try:
+            with open('/proc/device-tree/model', 'rb') as model_file:
+                is_raspberry_pi = b'raspberry pi' in model_file.read().lower()
+        except OSError:
+            return
+        if not is_raspberry_pi:
+            return
+
+        try:
+            from gpiozero import Button
+        except ImportError as error:
+            raise RuntimeError(
+                'GamePi13 GPIO controls require gpiozero; '
+                'install it with "sudo apt install python3-gpiozero"'
+            ) from error
+
+        with ExitStack() as resources:
+            self.notify_fd, self.notify_write_fd = os.pipe2(os.O_NONBLOCK)
+            resources.callback(os.close, self.notify_fd)
+            resources.callback(os.close, self.notify_write_fd)
+            for pin, key in GAMEPI13_GPIO_KEYS.items():
+                button = Button(pin, pull_up=True, bounce_time=0.05)
+                resources.callback(button.close)
+                button.when_pressed = lambda key=key: self._queue_gpio_key(key)
+                self.gpio_buttons.append(button)
+            resources.pop_all()
+        self.mode = 'gpiozero'
+
+    def _queue_gpio_key(self, key):
+        self.gpio_keys.put(key)
+        try:
+            os.write(self.notify_write_fd, b'.')
+        except BlockingIOError:
+            pass
+
+    def process_gpio_events(self, process_key):
+        if self.notify_fd is None:
+            return
+        while True:
+            try:
+                if not os.read(self.notify_fd, 4096):
+                    break
+            except BlockingIOError:
+                break
+        while True:
+            try:
+                key = self.gpio_keys.get_nowait()
+            except queue.Empty:
+                break
+            process_key(key)
 
     def _set_axis(self, number, value, process_key):
         if number not in self.axes:
@@ -970,9 +1038,18 @@ class GamePi13Controller:
         self.repeat_at = time.monotonic() + self.repeat_interval
 
     def close(self):
+        for button in self.gpio_buttons:
+            button.close()
+        self.gpio_buttons.clear()
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
+        if self.notify_fd is not None:
+            os.close(self.notify_fd)
+            self.notify_fd = None
+        if self.notify_write_fd is not None:
+            os.close(self.notify_write_fd)
+            self.notify_write_fd = None
 
 
 class Application:
@@ -1090,6 +1167,8 @@ class Application:
             sel.register(player.socket, selectors.EVENT_READ)
             if self.controller.fd is not None:
                 sel.register(self.controller.fd, selectors.EVENT_READ)
+            if self.controller.notify_fd is not None:
+                sel.register(self.controller.notify_fd, selectors.EVENT_READ)
             prev = time.time()
 
             while True:
@@ -1119,6 +1198,8 @@ class Application:
                         self.process_key(self.screen.get_wch())
                     elif key.fileobj is player.socket:
                         player.parse_progress()
+                    elif key.fileobj == self.controller.notify_fd:
+                        self.controller.process_gpio_events(self.process_key)
                     elif key.fileobj == self.controller.fd:
                         controller_fd = key.fileobj
                         self.controller.process_events(self.process_key)

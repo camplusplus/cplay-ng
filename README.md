@@ -41,31 +41,22 @@ output and mixer volume; cplay does not choose or reroute the ALSA device.
 
 # GamePi13 controls
 
-When the Waveshare GamePi13 GPIO driver exposes the pad as a Linux input
-device, cplay looks for its `GPIO Controller` joystick automatically. It
-reads `/dev/input/js*`, and can fall back to `/dev/input/event*` if the
-joystick interface is unavailable. The D-pad navigates, A selects/plays, B
-goes back, X toggles play/pause, Y skips to the next track, L/R seek
-backward/forward, Select opens help, and Start switches tabs. Holding a D-pad
-direction repeats navigation. Keyboard controls continue to work as well.
+For the GamePi13 GPIO buttons, cplay uses `gpiozero` directly, so no
+`mk_arcade_joystick_rpi` kernel module is required. On Raspberry Pi OS
+Bookworm Lite, install it with:
 
-Install and configure the GPIO joystick driver as described in the
-[GamePi13 guide](https://www.waveshare.com/wiki/GamePi13), then reboot and
-check that Linux created a GamePi input device:
+    sudo apt install python3-gpiozero
 
-    cat /proc/bus/input/devices
-    ls -l /dev/input/
+cplay uses BCM GPIO pins with pull-ups and 50 ms debounce, matching the
+`Button(pin, pull_up=True, bounce_time=0.05)` setup. The mapping is GPIO 5/6
+for Up/Down, 16/13 for Left/Right, 21 for A, 20 for B, 15 for X, 12 for Y,
+23 for L, 14 for R, 19 for Select, and 26 for Start. The D-pad navigates, A
+selects/plays, B goes back, X toggles play/pause, Y skips, L/R seek, Select
+opens help, and Start switches tabs. Keyboard controls continue to work.
 
-The device should be named `GPIO Controller 1`. Your user must have read
-permission for its `/dev/input/js*` or `/dev/input/event*` node. If no
-`GPIO Controller` device appears, the driver is not loaded or did not build
-for the installed Bookworm kernel; cplay cannot read the GPIO buttons until
-the driver is working. To check whether Linux receives button events, install
-`evtest` and run `sudo evtest /dev/input/eventN` for the GamePi device shown
-by the commands above. If Linux sees the events but cplay does not, make sure
-you are running this updated cplay version and that your user can read the
-device node. For a non-default device path, set `CPLAY_GAMEPI13_DEVICE`
-before starting cplay.
+If a GamePi13 joystick device is present, cplay can read that instead. To
+select a specific Linux input device, set `CPLAY_GAMEPI13_DEVICE` before
+starting cplay.
 
 # Installation
 

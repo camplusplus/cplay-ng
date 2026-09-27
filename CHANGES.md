@@ -2,7 +2,7 @@
 
 - add GamePi13 joystick controls
 - fix GamePi13 button-map ioctl
-- support GamePi13 event devices when joystick nodes are unavailable
+- read GamePi13 GPIO buttons directly with gpiozero when no joystick device is present
 - play SID files with sidplayfp instead of requiring mpv's libgme demuxer
 
 # 5.5.0 (2026-04-25)
