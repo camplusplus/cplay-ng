@@ -24,7 +24,9 @@ design while evolving with a shifting environment.
 SID files are played directly by sidplayfp; mpv and FFmpeg do not need SID
 support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
 configured song length, and seeks by restarting at a five-second offset.
-The volume keys control mpv and do not affect sidplayfp playback.
+SID playback is capped at three minutes per track to prevent endless tunes
+from playing forever. The volume keys control mpv and do not affect sidplayfp
+playback.
 
 On Raspberry Pi OS Bookworm Lite, sidplayfp sends audio through the system
 audio output. To use a Raspberry Pi 3's 3.5 mm jack, select **Headphones**

@@ -27,6 +27,7 @@ AUDIO_EXTENSIONS = [
     'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma',
     'sid',
 ]
+SID_MAX_DURATION = 180
 
 HELP = """Global
 ------
@@ -308,11 +309,17 @@ class Player:
 
     def _start_sid(self, *, paused=False):
         self._stop_sid()
+        remaining = SID_MAX_DURATION - self.position
+        if remaining <= 0:
+            self._sid_proc = None
+            self.is_playing = True
+            return
         self._sid_proc = subprocess.Popen(
             [
                 'sidplayfp',
                 '-q',
                 f'-b{self.position:.3f}',
+                f'-t{remaining:.3f}',
                 os.path.abspath(self.path),
             ],
             stdin=subprocess.DEVNULL,
@@ -411,8 +418,13 @@ class Player:
         if self._is_sid:
             return (
                 self.is_playing
-                and self._sid_proc is not None
-                and self._sid_proc.poll() is not None
+                and (
+                    self.position >= SID_MAX_DURATION
+                    or (
+                        self._sid_proc is not None
+                        and self._sid_proc.poll() is not None
+                    )
+                )
             )
         return self.is_playing and self._playing == 0
 

@@ -4,6 +4,7 @@
 - fix GamePi13 button-map ioctl
 - read GamePi13 GPIO buttons directly with gpiozero when no joystick device is present
 - play SID files with sidplayfp instead of requiring mpv's libgme demuxer
+- limit SID playback to three minutes per track
 
 # 5.5.0 (2026-04-25)
 
