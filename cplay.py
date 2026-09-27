@@ -27,7 +27,9 @@ AUDIO_EXTENSIONS = [
     'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma',
     'sid',
 ]
-SID_MAX_DURATION = 180
+SID_MAX_DURATION = 8
+SID_NEXT_TRACK_DELAY = 3
+SID_DEBUG = os.getenv('CPLAY_SID_DEBUG') == '1'
 
 HELP = """Global
 ------
@@ -217,6 +219,8 @@ class Player:
         self._sid_proc = None
         self._sid_paused = False
         self._sid_started_at = None
+        self._sid_finished_at = None
+        self._sid_exit_reported = False
 
         self.socket, self.socket_mpv = socket.socketpair()
         self._proc = subprocess.Popen(
@@ -287,7 +291,11 @@ class Player:
         )
 
     def _update_sid_position(self):
-        if self._sid_proc and self._sid_started_at is not None:
+        if (
+            self._sid_proc
+            and self._sid_proc.poll() is None
+            and self._sid_started_at is not None
+        ):
             now = time.monotonic()
             self.position += now - self._sid_started_at
             self._sid_started_at = now
@@ -309,22 +317,27 @@ class Player:
 
     def _start_sid(self, *, paused=False):
         self._stop_sid()
-        remaining = SID_MAX_DURATION - self.position
-        if remaining <= 0:
-            self._sid_proc = None
-            self.is_playing = True
-            return
+        self._sid_finished_at = None
+        command = [
+            'sidplayfp',
+            '-q',
+            f'-b{self.position % SID_MAX_DURATION:.3f}',
+            f'-t{SID_MAX_DURATION}',
+            os.path.abspath(self.path),
+        ]
+        if SID_DEBUG:
+            print(
+                f'Starting SID process: {command!r}',
+                file=sys.stderr,
+                flush=True,
+            )
         self._sid_proc = subprocess.Popen(
-            [
-                'sidplayfp',
-                '-q',
-                f'-b{self.position:.3f}',
-                f'-t{remaining:.3f}',
-                os.path.abspath(self.path),
-            ],
+            command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
+            stderr=None if SID_DEBUG else subprocess.DEVNULL,
         )
+        self._sid_exit_reported = False
         self._sid_started_at = time.monotonic()
         self._sid_paused = False
         self.is_playing = True
@@ -365,6 +378,7 @@ class Player:
         else:
             self.path = path
             self.position = 0
+        self._sid_finished_at = None
         self.length = 0
         self._seek_step = 0
         self._play()
@@ -416,16 +430,25 @@ class Player:
     @property
     def is_finished(self):
         if self._is_sid:
-            return (
-                self.is_playing
-                and (
-                    self.position >= SID_MAX_DURATION
-                    or (
-                        self._sid_proc is not None
-                        and self._sid_proc.poll() is not None
-                    )
-                )
+            if not self.is_playing:
+                return False
+            returncode = (
+                self._sid_proc.poll() if self._sid_proc is not None else None
             )
+            finished = self._sid_proc is not None and returncode is not None
+            if not finished:
+                return False
+            if SID_DEBUG and not self._sid_exit_reported:
+                print(
+                    f'SID process exited ({returncode}): {self.path}',
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._sid_exit_reported = True
+            now = time.monotonic()
+            if self._sid_finished_at is None:
+                self._sid_finished_at = now
+            return now - self._sid_finished_at >= SID_NEXT_TRACK_DELAY
         return self.is_playing and self._playing == 0
 
     def cleanup(self):
@@ -651,8 +674,7 @@ class Filelist(List):
         if os.path.isdir(item):
             self.set_path(item)
         elif ext in AUDIO_EXTENSIONS:
-            playlist.active = -1
-            player.play(item)
+            playlist.play_from_directory(item)
         elif ext == 'm3u':
             playlist.load(item)
             app.toggle_tabs()
@@ -706,6 +728,21 @@ class Playlist(List):
         self.cursor = 0
         self.active = -1
         self._played = set()
+
+    def play_from_directory(self, path):
+        selected = os.path.abspath(path)
+        directory = os.path.dirname(selected)
+        self.clear()
+        self.path = None
+        self.items_written = []
+        self.items = [
+            entry.path
+            for entry in listdir(directory)
+            if not entry.is_dir() and get_ext(entry.name) in AUDIO_EXTENSIONS
+        ]
+        self.active = self.items.index(selected)
+        self.set_cursor(self.active)
+        player.play(selected)
 
     def reorder(self, fn):
         if not self.items:
@@ -841,8 +878,7 @@ class Playlist(List):
         elif key == '\n':
             if not self.items:
                 return True
-            self.active = self.cursor
-            player.play(self.items[self.active])
+            self.play_from_directory(self.items[self.cursor])
         elif key == '@':
             self.set_cursor(self.active)
         elif key == 's':
@@ -1220,7 +1256,14 @@ class Application:
 
                 self.controller.repeat(self.process_key)
                 if player.is_finished:
-                    player.play(playlist.next())
+                    next_path = playlist.next()
+                    if SID_DEBUG:
+                        print(
+                            f'Advancing playlist to: {next_path!r}',
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    player.play(next_path)
 
                 self.render()
 

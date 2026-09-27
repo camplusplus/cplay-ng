@@ -24,9 +24,13 @@ design while evolving with a shifting environment.
 SID files are played directly by sidplayfp; mpv and FFmpeg do not need SID
 support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
 configured song length, and seeks by restarting at a five-second offset.
-SID playback is capped at three minutes per track to prevent endless tunes
-from playing forever. The volume keys control mpv and do not affect sidplayfp
-playback.
+sidplayfp plays the subtunes in each SID file and applies the configured
+maximum duration to each subtune individually. Once all subtunes finish,
+cplay waits three seconds before starting the next playlist file, allowing ALSA
+to release the audio device.
+The volume keys control mpv and do not affect sidplayfp playback.
+If a SID file does not advance, run cplay with `CPLAY_SID_DEBUG=1 cplay-ng`
+to show each sidplayfp command and any error output.
 
 On Raspberry Pi OS Bookworm Lite, sidplayfp sends audio through the system
 audio output. To use a Raspberry Pi 3's 3.5 mm jack, select **Headphones**
@@ -69,3 +73,6 @@ starting cplay.
     $ cplay-ng
 
 Press `h` to get a list of available keys.
+Starting an audio file from either the file browser or the playlist replaces
+the playlist with playable audio files in that file's directory, beginning
+at the selected track and continuing in filename order.
