@@ -325,8 +325,7 @@ class Player:
         command = [
             'sidplayfp',
             '-q',
-            f'-b{self.position % SID_MAX_DURATION:.3f}',
-            f'-t{SID_MAX_DURATION}',
+            f'-os1',
             os.path.abspath(self.path),
         ]
         if SID_DEBUG:

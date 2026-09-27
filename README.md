@@ -22,11 +22,8 @@ design while evolving with a shifting environment.
     (available on Raspberry Pi OS with `sudo apt install sidplayfp`).
 
 SID files are played directly by sidplayfp; mpv and FFmpeg do not need SID
-support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
-configured song length, and seeks by restarting at a five-second offset.
-sidplayfp plays the subtunes in each SID file and applies the configured
-maximum duration to each subtune individually. Once all subtunes finish,
-cplay waits three seconds before starting the next playlist file, allowing ALSA
+support. cplay shows elapsed time only for SID tracks, limit playback duration per SID subtune to 1 loop - use hvsc Song Lenght MD5,
+cplay waits two seconds before starting the next playlist file, allowing ALSA
 to release the audio device.
 The volume keys control mpv and do not affect sidplayfp playback.
 If a SID file does not advance, run cplay with `CPLAY_SID_DEBUG=1 cplay-ng`
@@ -39,7 +36,7 @@ requested. If the jack is still silent, check that `/boot/firmware/config.txt`
 contains `dtparam=audio=on`, and select analog output with:
 
     sudo amixer cset numid=3 1
-
+If necessary add snd_bcm2835.enable_headphones=1 to cmdline.txt in boot partition (or folder /boot/firmware/cmdline.txt)
 Test the sound path independently of cplay with
 `sidplayfp -v /path/to/song.sid`. Verbose output reports which audio driver
 sidplayfp uses. If this direct test is silent too, check the Pi's selected
