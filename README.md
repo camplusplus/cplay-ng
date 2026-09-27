@@ -26,19 +26,46 @@ support. cplay shows elapsed time only for SID tracks, uses sidplayfp's
 configured song length, and seeks by restarting at a five-second offset.
 The volume keys control mpv and do not affect sidplayfp playback.
 
+On Raspberry Pi OS Bookworm Lite, sidplayfp sends audio through the system
+audio output. To use a Raspberry Pi 3's 3.5 mm jack, select **Headphones**
+in `sudo raspi-config` under **System Options > Audio**, then reboot if
+requested. If the jack is still silent, check that `/boot/firmware/config.txt`
+contains `dtparam=audio=on`, and select analog output with:
+
+    sudo amixer cset numid=3 1
+
+Test the sound path independently of cplay with
+`sidplayfp -v /path/to/song.sid`. Verbose output reports which audio driver
+sidplayfp uses. If this direct test is silent too, check the Pi's selected
+output and mixer volume; cplay does not choose or reroute the ALSA device.
+
 # GamePi13 controls
 
-When the Waveshare GamePi13 joystick driver exposes the pad as
-`/dev/input/js0`, cplay reads it automatically. The D-pad navigates, A
-selects/plays, B goes back, X toggles play/pause, Y skips to the next track,
-L/R seek backward/forward, Select opens help, and Start switches tabs.
-Holding a D-pad direction repeats navigation. Keyboard controls continue to
-work as well.
+When the Waveshare GamePi13 GPIO driver exposes the pad as a Linux input
+device, cplay looks for its `GPIO Controller` joystick automatically. It
+reads `/dev/input/js*`, and can fall back to `/dev/input/event*` if the
+joystick interface is unavailable. The D-pad navigates, A selects/plays, B
+goes back, X toggles play/pause, Y skips to the next track, L/R seek
+backward/forward, Select opens help, and Start switches tabs. Holding a D-pad
+direction repeats navigation. Keyboard controls continue to work as well.
 
 Install and configure the GPIO joystick driver as described in the
-[GamePi13 guide](https://www.waveshare.com/wiki/GamePi13), and make sure your
-user can read `/dev/input/js0`. For a non-default joystick device, set
-`CPLAY_GAMEPI13_DEVICE` to its path before starting cplay.
+[GamePi13 guide](https://www.waveshare.com/wiki/GamePi13), then reboot and
+check that Linux created a GamePi input device:
+
+    cat /proc/bus/input/devices
+    ls -l /dev/input/
+
+The device should be named `GPIO Controller 1`. Your user must have read
+permission for its `/dev/input/js*` or `/dev/input/event*` node. If no
+`GPIO Controller` device appears, the driver is not loaded or did not build
+for the installed Bookworm kernel; cplay cannot read the GPIO buttons until
+the driver is working. To check whether Linux receives button events, install
+`evtest` and run `sudo evtest /dev/input/eventN` for the GamePi device shown
+by the commands above. If Linux sees the events but cplay does not, make sure
+you are running this updated cplay version and that your user can read the
+device node. For a non-default device path, set `CPLAY_GAMEPI13_DEVICE`
+before starting cplay.
 
 # Installation
 

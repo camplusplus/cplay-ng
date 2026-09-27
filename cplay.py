@@ -3,6 +3,7 @@
 import curses
 import fcntl
 import functools
+import glob
 import json
 import os
 import random
@@ -78,7 +79,12 @@ JS_EVENT_BUTTON = 0x01
 JS_EVENT_AXIS = 0x02
 JS_EVENT_INIT = 0x80
 JS_EVENT = struct.Struct('<IhBB')
+INPUT_EVENT = struct.Struct('@llHHi')
 JSIOCGBTNMAP = 0x84006A34
+EV_KEY = 0x01
+EV_ABS = 0x03
+ABS_X = 0x00
+ABS_Y = 0x01
 BTN_TO_KEY = {
     0x130: '\n',  # A
     0x131: curses.KEY_BACKSPACE,  # B
@@ -834,17 +840,20 @@ class Playlist(List):
 class GamePi13Controller:
     def __init__(self):
         self.fd = None
+        self.mode = None
+        self.buttons = {}
         self.buffer = b''
         self.axes = {0: 0, 1: 0}
         self.repeat_key = None
         self.repeat_at = None
         self.repeat_interval = 0.12
-        path = os.getenv('CPLAY_GAMEPI13_DEVICE', '/dev/input/js0')
-        try:
-            self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
-        except FileNotFoundError:
+        path = self._find_device()
+        if path is None:
             return
-
+        self.mode = 'evdev' if os.path.basename(path).startswith('event') else 'joystick'
+        self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        if self.mode == 'evdev':
+            return
         button_map = bytearray(512 * 2)
         try:
             fcntl.ioctl(self.fd, JSIOCGBTNMAP, button_map, True)
@@ -858,46 +867,93 @@ class GamePi13Controller:
             if code in BTN_TO_KEY
         }
 
+    @staticmethod
+    def _device_name(path):
+        basename = os.path.basename(path)
+        name_path = f'/sys/class/input/{basename}/device/name'
+        try:
+            with open(name_path) as name_file:
+                return name_file.read().strip()
+        except OSError:
+            return ''
+
+    @classmethod
+    def _find_device(cls):
+        configured = os.getenv('CPLAY_GAMEPI13_DEVICE')
+        if configured:
+            return configured
+
+        joystick_paths = sorted(glob.glob('/dev/input/js[0-9]*'))
+        event_paths = sorted(glob.glob('/dev/input/event[0-9]*'))
+        for path in joystick_paths + event_paths:
+            if 'gpio controller' in cls._device_name(path).casefold():
+                return path
+        if '/dev/input/js0' in joystick_paths:
+            return '/dev/input/js0'
+        if joystick_paths:
+            return joystick_paths[0]
+        return None
+
     def _set_axis(self, number, value, process_key):
         if number not in self.axes:
             return
-        direction = -1 if value < -16000 else 1 if value > 16000 else 0
+        old_direction = self.axes[number]
+        threshold = 0.5 if self.mode == 'evdev' else 16000
+        direction = -1 if value < -threshold else 1 if value > threshold else 0
         if self.axes[number] == direction:
             return
         self.axes[number] = direction
+        if old_direction:
+            old_key = (
+                (curses.KEY_LEFT if old_direction < 0 else curses.KEY_RIGHT)
+                if number == 0
+                else (curses.KEY_UP if old_direction < 0 else curses.KEY_DOWN)
+            )
+            if self.repeat_key == old_key:
+                self.repeat_key = None
+                self.repeat_at = None
+        if not direction:
+            return
         if number == 0:
             key = curses.KEY_LEFT if direction < 0 else curses.KEY_RIGHT
         else:
             key = curses.KEY_UP if direction < 0 else curses.KEY_DOWN
 
-        if direction:
-            self.repeat_key = key
-            process_key(key)
-            self.repeat_at = time.monotonic() + 0.45
-        elif self.repeat_key == key:
-            self.repeat_key = None
-            self.repeat_at = None
+        self.repeat_key = key
+        process_key(key)
+        self.repeat_at = time.monotonic() + 0.45
 
     def process_events(self, process_key):
         try:
-            data = os.read(self.fd, JS_EVENT.size * 32)
+            event_struct = INPUT_EVENT if self.mode == 'evdev' else JS_EVENT
+            data = os.read(self.fd, event_struct.size * 32)
         except BlockingIOError:
             return
         if not data:
             self.close()
             return
         self.buffer += data
-        while len(self.buffer) >= JS_EVENT.size:
-            _, value, event_type, number = JS_EVENT.unpack_from(self.buffer)
-            self.buffer = self.buffer[JS_EVENT.size:]
-            if event_type & JS_EVENT_INIT:
-                continue
-            if event_type == JS_EVENT_AXIS:
-                self._set_axis(number, value, process_key)
-            elif event_type == JS_EVENT_BUTTON and value:
-                key = self.buttons.get(number)
-                if key is not None:
-                    process_key(key)
+        while len(self.buffer) >= event_struct.size:
+            if self.mode == 'evdev':
+                _seconds, _microseconds, event_type, number, value = (
+                    INPUT_EVENT.unpack_from(self.buffer)
+                )
+                if event_type == EV_ABS and number in (ABS_X, ABS_Y):
+                    self._set_axis(number, value, process_key)
+                elif event_type == EV_KEY and value == 1:
+                    key = BTN_TO_KEY.get(number)
+                    if key is not None:
+                        process_key(key)
+            else:
+                _, value, event_type, number = JS_EVENT.unpack_from(self.buffer)
+                if not event_type & JS_EVENT_INIT:
+                    if event_type == JS_EVENT_AXIS:
+                        self._set_axis(number, value, process_key)
+                    elif event_type == JS_EVENT_BUTTON and value:
+                        key = self.buttons.get(number)
+                        if key is not None:
+                            process_key(key)
+            self.buffer = self.buffer[event_struct.size:]
 
     def get_timeout(self):
         if self.repeat_at is None:
@@ -1064,7 +1120,10 @@ class Application:
                     elif key.fileobj is player.socket:
                         player.parse_progress()
                     elif key.fileobj == self.controller.fd:
+                        controller_fd = key.fileobj
                         self.controller.process_events(self.process_key)
+                        if self.controller.fd is None:
+                            sel.unregister(controller_fd)
 
                 self.controller.repeat(self.process_key)
                 if player.is_finished:
