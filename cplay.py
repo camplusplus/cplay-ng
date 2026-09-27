@@ -27,8 +27,8 @@ AUDIO_EXTENSIONS = [
     'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma',
     'sid',
 ]
-SID_MAX_DURATION = 8
-SID_NEXT_TRACK_DELAY = 3
+SID_MAX_DURATION = 180
+SID_NEXT_TRACK_DELAY = 2
 SID_DEBUG = os.getenv('CPLAY_SID_DEBUG') == '1'
 
 HELP = """Global
@@ -308,12 +308,16 @@ class Player:
         if proc is None:
             return
         if proc.poll() is None:
+            if SID_DEBUG:
+                import traceback
+                print('--- _stop_sid() terminating a live process, call stack: ---', file=sys.stderr, flush=True)
+                traceback.print_stack(file=sys.stderr)
             proc.terminate()
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
     def _start_sid(self, *, paused=False):
         self._stop_sid()
@@ -331,12 +335,20 @@ class Player:
                 file=sys.stderr,
                 flush=True,
             )
-        self._sid_proc = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=None if SID_DEBUG else subprocess.DEVNULL,
-        )
+        try:
+            self._sid_proc = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=None if SID_DEBUG else subprocess.DEVNULL,
+            )
+            if SID_DEBUG:
+                print(f'PID: {self._sid_proc.pid}', file=sys.stderr, flush=True)
+        except Exception:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            raise
+
         self._sid_exit_reported = False
         self._sid_started_at = time.monotonic()
         self._sid_paused = False
@@ -1234,9 +1246,10 @@ class Application:
                     # if we have skipped multiple seconds, it is probably
                     # because the system was suspended. This heuristic is much
                     # simpler than detecting suspend via dbus.
-                    if player.is_playing and time.time() - prev > 5:
-                        player.stop()
-                    prev = time.time()
+                    #if player.is_playing and time.time() - prev > 5:
+                       # player.stop()
+                    #prev = time.time()
+                    #previous lines had bug
 
                     if key.fileobj is self.resize_in:
                         os.read(self.resize_in, 8)
@@ -1276,6 +1289,8 @@ app = Application()
 
 
 def main():
+    import signal as _s
+    print(f'SIGCHLD handler: {_s.getsignal(_s.SIGCHLD)}', file=sys.stderr)
     app.screen = curses.initscr()
     app.screen.keypad(True)  # noqa: FBT003
     curses.cbreak()
