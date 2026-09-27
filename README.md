@@ -42,6 +42,8 @@ Test the sound path independently of cplay with
 sidplayfp uses. If this direct test is silent too, check the Pi's selected
 output and mixer volume; cplay does not choose or reroute the ALSA device.
 
+Added 'mod', 'xm', 's3m', 'it' file playback support via ffmpeg demuxers.
+
 # GamePi13 controls
 
 For the GamePi13 GPIO buttons, cplay uses `gpiozero` directly, so no

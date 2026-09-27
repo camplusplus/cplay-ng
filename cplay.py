@@ -26,6 +26,7 @@ XDG_RUNTIME_DIR = os.getenv('XDG_RUNTIME_DIR', '/tmp')
 AUDIO_EXTENSIONS = [
     'mp3', 'ogg', 'oga', 'opus', 'flac', 'm4a', 'm4b', 'wav', 'mid', 'wma',
     'sid',
+    'mod', 'xm', 's3m', 'it',
 ]
 SID_MAX_DURATION = 180
 SID_NEXT_TRACK_DELAY = 2

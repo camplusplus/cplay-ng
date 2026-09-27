@@ -8,6 +8,7 @@
 - wait three seconds after SID playback before starting the next track
 - add opt-in sidplayfp process diagnostics with `CPLAY_SID_DEBUG=1`
 - play directory tracks after starting a file from the file browser or playlist
+- add 'mod', 'xm', 's3m', 'it' support
 
 # 5.5.0 (2026-04-25)
 
